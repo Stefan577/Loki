@@ -137,3 +137,5 @@ dmypy.json
 *.dimacs
 !*example*
 
+# Ressources
+\ressources
