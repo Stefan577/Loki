@@ -4,3 +4,4 @@ scipy
 pycosat
 scikit-learn
 PyYAML
+seaborn
