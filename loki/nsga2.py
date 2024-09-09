@@ -512,7 +512,7 @@ def compute_similarities(data, e_data, config):
         0 means no similarity at all; 1 means a strong similary between the two datasets.
     """
 
-    np.warnings.filterwarnings('ignore')
+    #np.warnings.filterwarnings('ignore')
     sim_results = list()
     sim_measures = list(config['NSGAII']['Similarity_Measures'])
     if "AD" in sim_measures:

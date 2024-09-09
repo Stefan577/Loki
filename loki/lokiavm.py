@@ -1,4 +1,6 @@
 import os
+import random
+
 import numpy as np
 import pycosat
 import itertools
@@ -12,13 +14,10 @@ class LokiAvm:
     FEATURE_FILE_CUES = ['feature']
     INTERACTION_FILE_CUES = ['interaction']
 
-    def __init__(self, dimacs_path, feature_file, interaction_file=None, sampling_method=None, perm_method=None):
+    def __init__(self, dimacs_path, feature_file, interaction_file=None):
         self.feature_influences = self.parse_influence_text(feature_file) if feature_file else None
         self.constraints = self.parse_dimacs(dimacs_path)
         self.interactions_influence = None
-
-        self.sampling_method = "random" if sampling_method is None else sampling_method
-        self.perm_method = "complete" if perm_method is None else perm_method
 
         if not dimacs_path or not feature_file:  # or not interaction_file:
             self.print("Assuming all files are in same folder as this python script (No complete set of paths passed)")
@@ -211,6 +210,136 @@ class LokiAvm:
                     cnf.append(line)
         return cnf
 
+    def sample_random(self, samples):
+        """
+           A function to randomly sample a specified number of variants from a model's search space.
+
+        Args:
+            samples (int): The number of variants to sample.
+
+        Returns:
+            A numpy matrix with the randomly sampled variants.Each row represents one variant.
+
+        """
+
+
+        new_c = self.constraints.copy()
+
+        # Subtract root feature
+        largest_dimacs_literal = len(self.feature_influences)
+        if not np.any([largest_dimacs_literal in sub_list for sub_list in self.constraints]):
+            dummy_constraint = [largest_dimacs_literal, -1 * largest_dimacs_literal]
+            new_c.append(dummy_constraint)
+
+        sol_collection = list()
+        sample_counter = 0
+        while len(sol_collection) < samples:
+            # Generate a random solution
+            random_solution = [random.choice([i, -i]) for i in range(1, largest_dimacs_literal + 1)]
+            sample_counter += 1
+            if random_solution and self.validate_solution(random_solution, new_c):
+                solution = LokiAvm.transform2binary(random_solution)
+                sol_collection.append(solution)
+
+        print(f"Finished sampling {len(sol_collection)} samples using random sampling (testet {sample_counter}"
+              f" configurations).")
+        return np.asmatrix(sol_collection)
+
+
+    def validate_solution(self, solution, constraints):
+        """
+        Helper function to validate if the given solution satisfies all constraints using pycosat.
+
+        Args:
+            solution (list): A list of integers representing a potential solution.
+            constraints (list of lists): The list of constraints in CNF format.
+
+        Returns:
+            bool: True if the solution satisfies all constraints, False otherwise.
+        """
+        # Check if the current solution is a valid solution for the constraints using pycosat.
+        augmented_constraints = constraints + [[lit] for lit in solution]
+
+        # Check if the augmented constraints are satisfiable
+        result = pycosat.solve(augmented_constraints)
+
+        return result != 'UNSAT'
+
+    def sample_dfs(self, samples):
+        """
+        A function to sample a specified number of variants from a model's search space using DFS.
+
+        Args:
+            samples (int): The number of variants to sample
+
+        Returns:
+            A numpy matrix with the sampled variants. Each row represents one variant.
+
+        """
+        new_c = self.constraints.copy()
+        
+        # subtract root feature
+        largest_dimacs_literal = len(self.feature_influences)
+        if not np.any([largest_dimacs_literal in sub_list for sub_list in self.constraints]):
+            dummy_constraint = [largest_dimacs_literal, -1 * largest_dimacs_literal]
+            new_c.append(dummy_constraint)
+        
+        # generate samples
+        sol_collection = list()
+        if not samples is None:
+            solutions = list(itertools.islice(pycosat.itersolve(new_c), samples))
+        else:
+            solutions = pycosat.itersolve(new_c)
+        for elem in solutions:
+            solution = LokiAvm.transform2binary(elem)
+            sol_collection.append(solution)
+        print (f"Finished sampling {len(sol_collection)} samples using DFS")
+        return np.asmatrix(sol_collection)
+    
+    def sample_coverage_based(self, samples, t, negative):
+        """
+        A function to sample a specified number of variants from a model's search space using coverage-based sampling.
+        
+        Args:
+            samples (int): The number of variants to sample
+            t (int): The coverade size 
+            negative (bool): Whether to use negative t-wise sampling
+        """
+        new_c = self.constraints.copy()
+        
+        # subtract root feature
+        largest_dimacs_literal = len(self.feature_influences) #- 1
+        if not np.any([largest_dimacs_literal in sub_list for sub_list in self.constraints]):
+            dummy_constraint = [largest_dimacs_literal, -1 * largest_dimacs_literal]
+            new_c.append(dummy_constraint)
+       
+        # generate samples 
+        sol_collection = list()
+        terms = list(itertools.combinations(range(len(self.feature_influences)), t))
+        if samples is not None:
+            shuffle(terms)
+        limit = samples if samples is not None else len(terms)
+        print(f"Sampling up to {limit} samples using{' negative' if negative else ''} {t}-wise coverage sampling")
+        for term in terms:
+            c_copy = list(new_c)
+            for option in term:
+                if not negative:
+                    c_copy.append([option + 1])
+                else:
+                    c_copy.append([-(option + 1)])
+                    
+            solution = pycosat.solve(c_copy)
+            if solution != "UNSAT":
+                new_c.append([-j for j in solution])
+                solution = LokiAvm.transform2binary(solution)
+                sol_collection.append(solution)
+                
+            if samples is not None and len(sol_collection) >= samples:
+                break
+            
+        print (f"Finished sampling after {len(sol_collection)} samples")
+        return np.asmatrix(sol_collection)
+
     @staticmethod
     def transform2binary(sol):
         """
@@ -228,59 +357,6 @@ class LokiAvm:
             else:
                 sol[index] = 1
         return sol
-
-    def get_valid_variants(self, size):
-        """
-        A function to compute the valid variants of a model.
-
-        Args:
-            constraint_list (list): All constrains provided for the model.
-            size (int): The desired number of variants for the model.
-
-        Returns:
-            A numpy matrix with variants, which satisfy the provided constrains. Each row represents one variant.
-        """
-        new_c = self.constraints.copy()
-        perm_method = self.perm_method
-        assert (perm_method in ["complete", "clauses", "no_permutation"]), (
-            "Options for Permutation_Method are: complete, clauses, no_permutation")
-        assert (self.sampling_method in ["random", "feature-wise", "pair-wise", "neg-feature-wise", "neg-pair-wise"]), (
-            "Options for Sampling_Method are: random, feature-wise, neg-feature-wise, pair-wise, neg-pair-wise")
-        sampling = {
-            'feature-wise': lambda x, i, j: x.append([i]),
-            'pair-wise': lambda x, i, j: x.extend([[i], [j]]),
-            'neg-feature-wise': lambda x, i, j: x.append([-(i)]),
-            'neg-pair-wise': lambda x, i, j: x.extend([[-i], [-j]])
-        }.get(self.sampling_method)
-        sol_collection = list()
-        # substract root feature
-        largest_dimacs_literal = len(self.feature_influences) - 1
-        if not np.any([largest_dimacs_literal in sub_list for sub_list in self.constraints]):
-            dummy_constraint = [largest_dimacs_literal, -1 * largest_dimacs_literal]
-            new_c.append(dummy_constraint)
-        if perm_method == "no_permutation" and self.sampling_method == "random":
-            solutions = list(itertools.islice(pycosat.itersolve(new_c), size))
-            for elem in solutions:
-                solution = Vm.transform2binary(elem)
-                sol_collection.append(solution)
-        else:
-            for i in range(0, size):
-                if perm_method == "clauses" or perm_method == "complete":
-                    shuffle(new_c)  # shuffle the constraints
-                    if perm_method == "complete":
-                        for constraint in new_c:  # shuffle feature assignment in constraints
-                            shuffle(constraint)
-                c_copy = list(new_c)
-                if self.sampling_method != "random":
-                    sampling(c_copy, i + 1, (i + 1) % size + 1)
-
-                solution = pycosat.solve(c_copy)
-                if solution != "UNSAT":
-                    new_c.append([j * -1 for j in solution])
-                    solution = LokiAvm.transform2binary(solution)
-                    sol_collection.append(solution)
-        m_sol_list = np.asmatrix(sol_collection)
-        return m_sol_list
 
     def annotate_interaction_coverage(self, variants, feature_influences, interaction_influences):
         """

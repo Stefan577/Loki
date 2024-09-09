@@ -10,6 +10,7 @@ import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import pycosat
 import seaborn as sns
 import yaml
@@ -27,17 +28,12 @@ class AvmGenerator:
     def __init__(self, conf_yaml, saver):
         self.config = conf_yaml
         self.saver = saver
-        # try:
-        self.valid_variants_size = int(conf_yaml['Variants']['NumberOfVariants'])
-        # except:
-        #     sys.exit("NumberOfVariants must be an integer. Please check your configuration file!")
         # GET ATTRIBUTES FROM CONFIG-FILE
         avm_yaml = conf_yaml['AttributedModel']
         vm_yaml = conf_yaml['NonAttributedModel']
         self.n_jobs = int(self.config['NumberOfThreads']) if 'NumberOfThreads' in self.config else Vm.DEFAULT_JOBS
-        sampling_yaml = self.config['Variants']
-        self.avm = Vm(avm_yaml, self.valid_variants_size, sampling_yaml, n_jobs=self.n_jobs, is_attributed=True)
-        self.vm = Vm(vm_yaml, self.valid_variants_size, sampling_yaml, n_jobs=self.n_jobs, is_attributed=False)
+        self.avm = Vm(avm_yaml, n_jobs=self.n_jobs, is_attributed=True)
+        self.vm = Vm(vm_yaml, n_jobs=self.n_jobs, is_attributed=False)
         print("Finished with creating variants")
 
     def run(self):
@@ -73,16 +69,11 @@ class AvmModificator():
         self.config = conf_yaml
         self.saver = saver
         avm_yaml = conf_yaml['AttributedModel']
-        try:
-            self.valid_variants_size = int(conf_yaml['Variants']['NumberOfVariants'])
-        except:
-            sys.exit("NumberOfVariants must be an integer. Please check your configuration file!")
-        sampling_yaml = self.config['Variants']
         self.n_jobs = int(self.config['NumberOfThreads']) if 'NumberOfThreads' in self.config else Vm.DEFAULT_JOBS
         self.random = int(self.config['RndSeed']) if 'RndSeed' in self.config else None
         np.random.seed(self.random)
         self.nsga2_rnd = int(2 ** 32 - 1)
-        self.avm = Vm(avm_yaml, self.valid_variants_size, sampling_yaml, n_jobs=self.n_jobs, is_attributed=True)
+        self.avm = Vm(avm_yaml, n_jobs=self.n_jobs, is_attributed=True)
         print('created AVM')
 
     def optimize(self):
@@ -109,63 +100,40 @@ class AvmComparison:
 class Vm(LokiAvm):
     DEFAULT_JOBS = 1
 
-    def __init__(self, yml, variant_set_size, sampling_yaml, is_attributed=False, using_interactions=False,
-                 n_jobs=-1):
-        feature_influence_file = yml['Feature-file']
+    def __init__(self, yml, is_attributed=False, n_jobs=-1):
         dimacs_path = yml['DIMACS-file']
-        if 'Interactions-file' in yml:
-            interactions_influence_file = yml['Interactions-file']
-        else:
-            interactions_influence_file = None
+        feature_influence_file = yml['Feature-file']
+        interactions_influence_file = yml['Interactions-file'] if 'Interactions-file' in yml else None
         super(Vm, self).__init__(dimacs_path, feature_influence_file, interactions_influence_file)
-        self.is_attributed = is_attributed
-        self.variant_set_size = variant_set_size
-        self.yml = yml
-        self.n_jobs = n_jobs
-        self.sampling_method = sampling_yaml['Sampling_Method']
-        self.num_variants = sampling_yaml['NumberOfVariants']
-        self.perm_method = sampling_yaml['Permutation_Method'] if 'Permutation_Method' in sampling_yaml else None
-        # self.is_attributed = False if 'New_Interactions_Specs' in yml else False
-
-        # TODO: uniform interface
-
-        if self.sampling_method != "random":
-            self.valid_variants = self.get_valid_variants(len(self.feature_influences.keys()) - 1)
+        
+        # Sampling
+        sampling_method = yml['Sampling_Method'] if 'Sampling_Method' in yml else 'dfs'
+        samples = yml['Samples'] if 'Samples' in yml else None
+        if sampling_method == 'dfs':
+            self.valid_variants = self.sample_dfs(samples)
+        elif sampling_method == 'coverage-based':
+            t = yml['t'] if 't' in yml else 1
+            negative = yml['Negative_Wise'] if 'Negative_Wise' in yml else False
+            self.valid_variants = self.sample_coverage_based(samples, t, negative)
+        elif sampling_method == 'random':
+            self.valid_variants = self.sample_random(samples)
         else:
-            self.valid_variants = self.get_valid_variants(self.variant_set_size)
+            raise(f"Sampling method {sampling_method} not implemented")  
 
-        if is_attributed:
-            self.interactions_specs = None
-            if 'Interactions-file' in yml:
-                # implies is_attributed == True
-                # interactions_influence_file = yml['Interactions-file']
-                self.interactions_influence = self.parse_influence_text(
-                    interactions_influence_file) if interactions_influence_file else None
-
-                self.valid_complete_variants = self.annotate_interaction_coverage(self.valid_variants,
-                                                                                  self.feature_influences,
-                                                                                  self.interactions_influence)
-
-            else:
-                self.interactions_influence = None
-                self.valid_complete_variants = self.valid_variants
-
+        self.interactions_specs = yml['New_Interactions_Specs'] if 'New_Interactions_Specs' in yml else None
+        if is_attributed and interactions_influence_file:
+            self.interactions_influence = self.parse_influence_text(interactions_influence_file)
+        elif not is_attributed and self.interactions_specs:
+            self.interactions_influence = self.new_interactions(self.constraints, self.feature_influences, self.interactions_specs, n_jobs)
         else:
-
-            self.interactions_specs = yml['New_Interactions_Specs'] if 'New_Interactions_Specs' in yml else None
-            if self.interactions_specs:
-                self.intgeractions_specs = list(map(int, self.interactions_specs))
-                self.interactions_influence = self.new_interactions(self.constraints,
-                                                                    self.feature_influences,
-                                                                    self.interactions_specs, self.n_jobs)
-
-                self.valid_complete_variants = self.annotate_interaction_coverage(self.valid_variants,
-                                                                                  self.feature_influences,
-                                                                                  self.interactions_influence)
-            else:
-                self.valid_complete_variants = self.valid_variants
-
-        print("initialized Vm")
+            self.interactions_influence = None
+        if self.interactions_influence:
+            self.valid_complete_variants = self.annotate_interaction_coverage(self.valid_variants,
+                                                                          self.feature_influences,
+                                                                          self.interactions_influence)
+        else:
+            self.valid_complete_variants = self.valid_variants
+        print("Initialized VM")
 
     def set_feature_influence(self, name, influence):
         self.feature_influences[name] = influence
@@ -212,59 +180,6 @@ class Vm(LokiAvm):
             lines.append(line)
         dump_str = str(os.linesep).join(lines)
         return dump_str
-
-    def get_valid_variants(self, size):
-        """
-        A function to compute the valid variants of a model.
-
-        Args:
-            constraint_list (list): All constrains provided for the model.
-            size (int): The desired number of variants for the model.
-
-        Returns:
-            A numpy matrix with variants, which satisfy the provided constrains. Each row represents one variant.
-        """
-        new_c = self.constraints.copy()
-        perm_method = self.perm_method
-        assert (perm_method in ["complete", "clauses", "no_permutation"]), (
-            "Options for Permutation_Method are: complete, clauses, no_permutation")
-        assert (self.sampling_method in ["random", "feature-wise", "pair-wise", "neg-feature-wise", "neg-pair-wise"]), (
-            "Options for Sampling_Method are: random, feature-wise, neg-feature-wise, pair-wise, neg-pair-wise")
-        sampling = {
-            'feature-wise': lambda x, i, j: x.append([i]),
-            'pair-wise': lambda x, i, j: x.extend([[i], [j]]),
-            'neg-feature-wise': lambda x, i, j: x.append([-(i)]),
-            'neg-pair-wise': lambda x, i, j: x.extend([[-i], [-j]])
-        }.get(self.sampling_method)
-        sol_collection = list()
-        # substract root feature
-        largest_dimacs_literal = len(self.feature_influences) #- 1
-        if not np.any([largest_dimacs_literal in sub_list for sub_list in self.constraints]):
-            dummy_constraint = [largest_dimacs_literal, -1 * largest_dimacs_literal]
-            new_c.append(dummy_constraint)
-        if perm_method == "no_permutation" and self.sampling_method == "random":
-            solutions = list(itertools.islice(pycosat.itersolve(new_c), size))
-            for elem in solutions:
-                solution = Vm.transform2binary(elem)
-                sol_collection.append(solution)
-        else:
-            for i in range(0, size):
-                if perm_method == "clauses" or perm_method == "complete":
-                    shuffle(new_c)  # shuffle the constraints
-                    if perm_method == "complete":
-                        for constraint in new_c:  # shuffle feature assignment in constraints
-                            shuffle(constraint)
-                c_copy = list(new_c)
-                if self.sampling_method != "random":
-                    sampling(c_copy, i + 1, (i + 1) % (size) + 1)
-
-                solution = pycosat.solve(c_copy)
-                if solution != "UNSAT":
-                    new_c.append([j * -1 for j in solution])
-                    solution = Vm.transform2binary(solution)
-                    sol_collection.append(solution)
-        m_sol_list = np.asmatrix(sol_collection)
-        return m_sol_list
 
     # check if interaction is true and false for at least one variant,
     # as well as if the interaction members are true and false in at least one variant
@@ -467,6 +382,13 @@ class Saver:
         self.copy_conf_doc()
         self.copy_template_files()
 
+    def store_measurements(self, directory, vm: Vm, filename):
+        df = pd.DataFrame(vm.valid_variants, columns=vm.feature_influences.keys())
+        df['Performance'] = vm.calc_performance_for_validation_variants()
+        
+        csv_file_path = os.path.join(directory, filename + ".csv")
+        df.to_csv(csv_file_path, index=False, sep=';')
+
     def store_text(self, directory, dump_str, filename):
         """
         A function to write the new features and interactions to their respective txt-files.
@@ -614,8 +536,8 @@ class Saver:
         eV.set_ylabel('density')
 
         # save the plot
-        plt.savefig(filepath + 'plots.png', bbox_inches='tight')
-        plt.savefig(filepath + 'plots.pdf', bbox_inches='tight')
+        plt.savefig(filepath + '/plots.png', bbox_inches='tight')
+        plt.savefig(filepath + '/plots.pdf', bbox_inches='tight')
         plt.clf()
         plt.close()
 
@@ -845,7 +767,8 @@ class Saver:
             result_dir = os.path.join(self.directory, "result" + str(i + 1))
             if not os.path.exists(result_dir):
                 os.makedirs(result_dir)
-
+            
+            self.store_measurements(result_dir, cur_vm, "new_measurements")
             self.store_text(result_dir, cur_vm.get_feature_dump(), "new_features")
             if cur_vm.uses_interactions() is not None:
                 self.store_text(result_dir, cur_vm.get_interaction_dump(), "new_interactions")

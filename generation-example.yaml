@@ -8,14 +8,16 @@ AVM-Generation:
     DIMACS-file: some.dimacs
     Feature-file: some_features.txt
     Interactions-file: some_interactions.txt
+    Sampling_Method: coverage-based
+    t: 2
+    Samples: 500
   NonAttributedModel:
     DIMACS-file: another.dimacs
     Feature-file: some_other_features.txt
     New_Interactions_Specs: [1000, 85, 2, 10, 3, 5, 4]
-  Variants:
-    Sampling_Method: random
-    NumberOfVariants: 500
-    Permutation_Method: complete
+    Sampling_Method: coverage-based
+    t: 2
+    Samples: 500
   NSGAII:
     Population_Size: 200
     Maximum_Generations: 100
