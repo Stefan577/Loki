@@ -1,10 +1,15 @@
 import os
 import random
+import shutil
+from traceback import print_tb
 
 import numpy as np
 import pycosat
 import itertools
 from random import shuffle
+from bdd4va.bdd4va import BDD
+from dimacs2BDD import *
+
 
 # from thor.thor2 import is_attributed, dimacs_path, feature_influence_file
 
@@ -265,6 +270,42 @@ class LokiAvm:
 
         return result != 'UNSAT'
 
+    def loki_sample_bdd(self, samples):
+        print("Check for BDD")
+        name = os.path.splitext(os.path.basename(self.dimacs_path))[0]
+        bdd_path = os.path.join(os.path.dirname(self.dimacs_path), f"{name}.dddmp")
+        if not os.path.exists(bdd_path):
+            print(f"No BDD found ({bdd_path}), creating BDD")
+            convert_dimacs_to_bdd(self.dimacs_path, os.path.dirname(self.dimacs_path))
+            #os.rename(f"tmp_bdd/{folder}/{name}.dddmp", bdd_path)
+            #try:
+            #    shutil.rmtree("tmp_bdd/")
+            #except OSError as e:
+            #    print("Error: %s - %s." % (e.filename, e.strerror))
+        print("Start Sampling")
+
+        #bdd = BDD(bdd_path, False)
+        #configurations = bdd.sample(samples, False)
+
+        configurations = sample_bdd(samples, bdd_path)
+        print(f"Finished Sampling\n")
+        features = list(self.feature_influences.keys())
+        num_configurations = len(configurations)
+        num_features = len(features)
+        binary_array = np.zeros((num_configurations, num_features), dtype=int)
+        for i, config in enumerate(configurations):
+            for feature in config:
+                if feature in features:
+                    # Setze 1 in der Spalte des Features
+                    feature_index = features.index(feature)
+                    binary_array[i, feature_index] = 1
+
+        unique_configuations = np.unique(binary_array, axis=0)
+        print(f"Found {len(binary_array)} configurations, {len(unique_configuations)} are unique.\n")
+        return np.asmatrix(binary_array)
+
+
+
     def sample_dfs(self, samples):
         """
         A function to sample a specified number of variants from a model's search space using DFS.
@@ -294,6 +335,8 @@ class LokiAvm:
             solution = LokiAvm.transform2binary(elem)
             sol_collection.append(solution)
         print (f"Finished sampling {len(sol_collection)} samples using DFS")
+        print(sol_collection)
+        print(np.asmatrix(sol_collection))
         return np.asmatrix(sol_collection)
     
     def sample_coverage_based(self, samples, t, negative):

@@ -117,6 +117,8 @@ class Vm(LokiAvm):
             self.valid_variants = self.sample_coverage_based(samples, t, negative)
         elif sampling_method == 'random':
             self.valid_variants = self.sample_random(samples)
+        elif sampling_method == 'random_bdd':
+            self.valid_variants = self.loki_sample_bdd(samples)
         else:
             raise(f"Sampling method {sampling_method} not implemented")  
 
@@ -500,7 +502,7 @@ class Saver:
         #######
         if with_interactions:
             rI.set_title("real Interactions")
-            rI.hist(values_rI, bins=bin_I, density=False, fc="grey", weights=np.ones(len(values_rI)) / len(values_rI))
+            rI.hist(values_rI, bins=bin_I, density=True, fc="grey", weights=np.ones(len(values_rI)) / len(values_rI))
             rI.set_xlabel('value')
             rI.set_ylabel('density')
 
@@ -511,15 +513,15 @@ class Saver:
             kdeI.set_ylabel('density')
 
             eI.set_title("estimated Interactions")
-            eI.hist(values_eI, bins=bin_eI, density=False, fc="grey", weights=np.ones(len(values_eI)) / len(values_eI))
-            eI.hist(values_rI, bins=bin_I, density=False, fc="black", weights=np.ones(len(values_rI)) / len(values_rI),
+            eI.hist(values_eI, bins=bin_eI, density=True, fc="grey", weights=np.ones(len(values_eI)) / len(values_eI))
+            eI.hist(values_rI, bins=bin_I, density=True, fc="black", weights=np.ones(len(values_rI)) / len(values_rI),
                     alpha=0.1)
             eI.set_xlabel('value')
             eI.set_ylabel('density')
         ######
 
         rV.set_title("real Variants")
-        rV.hist(values_rV, bins=bin_V, density=False, fc="grey", weights=np.divide(1, values_rV))
+        rV.hist(values_rV, bins=bin_V, density=True, fc="grey", weights=np.divide(1, values_rV))
         rV.set_xlabel('value')
         rV.set_ylabel('density')
 
@@ -530,8 +532,8 @@ class Saver:
         kdeV.set_ylabel('density')
 
         eV.set_title("estimated Variants")
-        eV.hist(values_eV, bins=bin_eV, density=False, fc="grey", weights=np.divide(1, values_eV))
-        eV.hist(values_rV, bins=bin_V, density=False, fc="black", weights=np.divide(1, values_rV), alpha=0.1)
+        eV.hist(values_eV, bins=bin_eV, density=True, fc="grey", weights=np.divide(1, values_eV))
+        eV.hist(values_rV, bins=bin_V, density=True, fc="black", weights=np.divide(1, values_rV), alpha=0.1)
         eV.set_xlabel('value')
         eV.set_ylabel('density')
 

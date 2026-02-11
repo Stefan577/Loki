@@ -5,3 +5,5 @@ pycosat
 scikit-learn
 PyYAML
 seaborn
+git+https://github.com/Stefan577/BDD_Docker.git@main
+git+https://github.com/rheradio/bdd4va.git@main
